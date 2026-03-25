@@ -733,10 +733,15 @@ function printResults(command, results, io) {
   }
 
   for (const entry of results) {
+    if (entry.outcome === "error") {
+      io.out(`${entry.repo}: outcome=error message=${entry.error}`);
+      continue;
+    }
+    const counts = entry.counts ?? { staged: 0, unstaged: 0, untracked: 0 };
     io.out(
-      `${entry.repo}: outcome=${entry.outcome} current=${entry.currentBranch} target=${entry.targetBranch || "-"} clean=${entry.clean} staged=${entry.counts.staged} unstaged=${entry.counts.unstaged} untracked=${entry.counts.untracked}`
+      `${entry.repo}: outcome=${entry.outcome} current=${entry.currentBranch} target=${entry.targetBranch || "-"} clean=${entry.clean} staged=${counts.staged} unstaged=${counts.unstaged} untracked=${counts.untracked}`
     );
-    if (entry.actions.length > 0) {
+    if (entry.actions && entry.actions.length > 0) {
       io.out(`  ${renderActions(entry.actions)}`);
     }
   }
