@@ -11,6 +11,8 @@ const {
   discoverRepositories,
   main,
   parseArgs,
+  printResults,
+  resolveCliPath,
   runDirty,
   runSync
 } = require("../src/cli");
@@ -78,6 +80,12 @@ test("parseArgs treats a lone positional path as sync root", () => {
   assert.equal(parsed.root, "/tmp/workspace");
 });
 
+test("parseArgs expands a home-relative root path", () => {
+  const parsed = parseArgs(["--root=~/workspace"]);
+
+  assert.equal(parsed.root, path.join(os.homedir(), "workspace"));
+});
+
 test("parseArgs accepts additional read-only commands", () => {
   const parsed = parseArgs(["dirty", "/tmp/workspace"]);
 
@@ -96,6 +104,10 @@ test("parseArgs collects repository filters", () => {
 
   assert.deepEqual(parsed.only, ["api", "web"]);
   assert.deepEqual(parsed.exclude, ["/legacy/", "sandbox"]);
+});
+
+test("resolveCliPath keeps absolute paths stable", () => {
+  assert.equal(resolveCliPath("/tmp/workspace"), "/tmp/workspace");
 });
 
 test("collectRepoStatus counts staged, unstaged and untracked changes", () => {
@@ -232,4 +244,28 @@ test("main emits structured JSON and strict exit codes for agents", async () => 
   assert.equal(payload.exitCode, 1);
   assert.equal(payload.repoCount, 1);
   assert.equal(payload.results[0].repo, "dirty-repo");
+});
+
+test("printResults tolerates missing counts in text output", () => {
+  const lines = [];
+
+  assert.doesNotThrow(() =>
+    printResults(
+      "dirty",
+      [
+        {
+          repo: "broken-repo",
+          currentBranch: "main",
+          outcome: "ok"
+        }
+      ],
+      {
+        out: (line) => lines.push(line)
+      }
+    )
+  );
+
+  assert.deepEqual(lines, [
+    "broken-repo: branch=main staged=0 unstaged=0 untracked=0"
+  ]);
 });

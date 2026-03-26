@@ -1,4 +1,5 @@
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const { execFileSync } = require("node:child_process");
 
@@ -206,7 +207,7 @@ function parseArgs(argv) {
     }
   }
 
-  parsed.root = path.resolve(parsed.root);
+  parsed.root = resolveCliPath(parsed.root);
   return parsed;
 }
 
@@ -216,6 +217,18 @@ function resolveRequiredValue(argv, index, optionName) {
     throw new Error(`Missing value for ${optionName}`);
   }
   return value;
+}
+
+function resolveCliPath(value) {
+  if (value === "~") {
+    return os.homedir();
+  }
+
+  if (value.startsWith(`~${path.sep}`)) {
+    return path.join(os.homedir(), value.slice(2));
+  }
+
+  return path.resolve(value);
 }
 
 function splitCommaList(value) {
@@ -660,6 +673,14 @@ function runGit(repoPath, args, extraOptions = {}) {
   }
 }
 
+function normalizeCounts(counts) {
+  return {
+    staged: counts && typeof counts.staged === "number" ? counts.staged : 0,
+    unstaged: counts && typeof counts.unstaged === "number" ? counts.unstaged : 0,
+    untracked: counts && typeof counts.untracked === "number" ? counts.untracked : 0
+  };
+}
+
 function printResults(command, results, io) {
   if (results.length === 0) {
     io.out("No git repositories found on this level.");
@@ -672,8 +693,9 @@ function printResults(command, results, io) {
         io.out(`${entry.repo}: outcome=error message=${entry.error}`);
         continue;
       }
+      const counts = normalizeCounts(entry.counts);
       io.out(
-        `${entry.repo}: branch=${entry.currentBranch} target=${entry.targetBranch || "-"} clean=${entry.clean} staged=${entry.counts.staged} unstaged=${entry.counts.unstaged} untracked=${entry.counts.untracked}`
+        `${entry.repo}: branch=${entry.currentBranch} target=${entry.targetBranch || "-"} clean=${entry.clean} staged=${counts.staged} unstaged=${counts.unstaged} untracked=${counts.untracked}`
       );
     }
     return;
@@ -725,8 +747,9 @@ function printResults(command, results, io) {
         io.out(`${entry.repo}: outcome=error message=${entry.error}`);
         continue;
       }
+      const counts = normalizeCounts(entry.counts);
       io.out(
-        `${entry.repo}: branch=${entry.currentBranch} staged=${entry.counts.staged} unstaged=${entry.counts.unstaged} untracked=${entry.counts.untracked}`
+        `${entry.repo}: branch=${entry.currentBranch} staged=${counts.staged} unstaged=${counts.unstaged} untracked=${counts.untracked}`
       );
     }
     return;
@@ -737,7 +760,7 @@ function printResults(command, results, io) {
       io.out(`${entry.repo}: outcome=error message=${entry.error}`);
       continue;
     }
-    const counts = entry.counts ?? { staged: 0, unstaged: 0, untracked: 0 };
+    const counts = normalizeCounts(entry.counts);
     io.out(
       `${entry.repo}: outcome=${entry.outcome} current=${entry.currentBranch} target=${entry.targetBranch || "-"} clean=${entry.clean} staged=${counts.staged} unstaged=${counts.unstaged} untracked=${counts.untracked}`
     );
@@ -802,6 +825,8 @@ module.exports = {
   helpText,
   main,
   parseArgs,
+  printResults,
+  resolveCliPath,
   runDirty,
   runList,
   runSync
