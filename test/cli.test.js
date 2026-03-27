@@ -7,6 +7,7 @@ const { execFileSync } = require("node:child_process");
 
 const {
   collectRepoStatus,
+  detectProtectedBranch,
   determineExitCode,
   discoverRepositories,
   main,
@@ -106,6 +107,13 @@ test("parseArgs collects repository filters", () => {
   assert.deepEqual(parsed.exclude, ["/legacy/", "sandbox"]);
 });
 
+test("parseArgs marks explicitly configured protected branches", () => {
+  const parsed = parseArgs(["sync", "/tmp/workspace", "--protected", "main,develop"]);
+
+  assert.equal(parsed.protectedBranchesExplicit, true);
+  assert.deepEqual(parsed.protectedBranches, ["main", "develop"]);
+});
+
 test("resolveCliPath keeps absolute paths stable", () => {
   assert.equal(resolveCliPath("/tmp/workspace"), "/tmp/workspace");
 });
@@ -185,7 +193,28 @@ test("runSync skips dirty repos and pulls clean repos to the protected branch", 
   assert.equal(cleanResult.outcome, "ok");
   assert.equal(cleanResult.targetBranch, "main");
   assert.equal(dirtyResult.outcome, "skipped_dirty");
+  assert.equal(dirtyResult.reason, "worktree_dirty");
   assert.match(fs.readFileSync(path.join(clean.repoPath, "README.md"), "utf8"), /updated/);
+});
+
+test("detectProtectedBranch lets explicit protected branches override origin HEAD", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "git-batch-protected-"));
+  const repo = setupClonedRepo(root, "priority-repo");
+
+  git(repo.seedPath, ["checkout", "-b", "develop"]);
+  git(repo.seedPath, ["push", "-u", "origin", "develop"]);
+  git(repo.originPath, ["symbolic-ref", "HEAD", "refs/heads/develop"]);
+  git(repo.repoPath, ["fetch", "--all", "--prune"]);
+  git(repo.repoPath, ["remote", "set-head", "origin", "-a"]);
+
+  assert.equal(
+    detectProtectedBranch(repo.repoPath, ["main"], { preferConfigured: true }),
+    "main"
+  );
+  assert.equal(
+    detectProtectedBranch(repo.repoPath, ["main"], { preferConfigured: false }),
+    "develop"
+  );
 });
 
 test("runDirty returns only repositories with local changes", () => {
@@ -267,5 +296,32 @@ test("printResults tolerates missing counts in text output", () => {
 
   assert.deepEqual(lines, [
     "broken-repo: branch=main staged=0 unstaged=0 untracked=0"
+  ]);
+});
+
+test("printResults includes skip reasons for sync output", () => {
+  const lines = [];
+
+  printResults(
+    "sync",
+    [
+      {
+        repo: "dirty-repo",
+        currentBranch: "feature/test",
+        targetBranch: "-",
+        clean: false,
+        counts: { staged: 0, unstaged: 1, untracked: 0 },
+        outcome: "skipped_dirty",
+        reason: "worktree_dirty",
+        actions: []
+      }
+    ],
+    {
+      out: (line) => lines.push(line)
+    }
+  );
+
+  assert.deepEqual(lines, [
+    "dirty-repo: outcome=skipped_dirty current=feature/test target=- clean=false staged=0 unstaged=1 untracked=0 reason=worktree_dirty"
   ]);
 });

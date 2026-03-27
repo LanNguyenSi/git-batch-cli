@@ -21,6 +21,8 @@ Default `sync` flow:
 
 Dirty repositories are skipped by default.
 
+If you pass `--protected`, that explicit branch order takes precedence over `origin/HEAD`.
+
 ## Local Installation
 
 ```bash
@@ -125,8 +127,9 @@ git-batch sync ~/git --only '/^(api|web)-/' --exclude '/-sandbox$/'
 
 Target branch detection uses this order:
 
-1. `origin/HEAD`
-2. first matching branch from `main, master, develop, dev, staging, production, trunk`
+1. explicit `--protected` order, if provided
+2. `origin/HEAD`
+3. first matching branch from `main, master, develop, dev, staging, production, trunk`
 
 ## Output Model
 
