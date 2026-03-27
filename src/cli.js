@@ -79,6 +79,7 @@ function parseArgs(argv) {
     command: "sync",
     root: process.cwd(),
     protectedBranches: [...DEFAULT_PROTECTED_BRANCHES],
+    protectedBranchesExplicit: false,
     only: [],
     exclude: [],
     includeCurrent: false,
@@ -146,6 +147,7 @@ function parseArgs(argv) {
       parsed.protectedBranches = splitCommaList(
         resolveRequiredValue(argv, index, "--protected")
       );
+      parsed.protectedBranchesExplicit = true;
       continue;
     }
 
@@ -153,6 +155,7 @@ function parseArgs(argv) {
       parsed.protectedBranches = splitCommaList(
         token.slice("--protected=".length)
       );
+      parsed.protectedBranchesExplicit = true;
       continue;
     }
 
@@ -364,7 +367,9 @@ function runStatus(repos, options) {
         repo: repo.name,
         path: repo.path,
         currentBranch: status.branch,
-        targetBranch: detectProtectedBranch(repo.path, options.protectedBranches),
+        targetBranch: detectProtectedBranch(repo.path, options.protectedBranches, {
+          preferConfigured: options.protectedBranchesExplicit
+        }),
         clean: status.clean,
         counts: status.counts,
         outcome: "ok"
@@ -382,7 +387,9 @@ function runBranches(repos, options) {
         repo: repo.name,
         path: repo.path,
         currentBranch: safeBranch(repo.path),
-        targetBranch: detectProtectedBranch(repo.path, options.protectedBranches),
+        targetBranch: detectProtectedBranch(repo.path, options.protectedBranches, {
+          preferConfigured: options.protectedBranchesExplicit
+        }),
         outcome: "ok"
       };
     } catch (error) {
@@ -456,22 +463,27 @@ function syncRepository(repo, options) {
     clean: status.clean,
     counts: status.counts,
     targetBranch: null,
+    reason: null,
     outcome: "ok",
     actions: []
   };
 
   if (!status.clean && !options.includeDirty) {
     result.outcome = "skipped_dirty";
+    result.reason = "worktree_dirty";
     return result;
   }
 
   executeGitCommand(repo.path, ["fetch", "--all", "--prune"], options, result);
 
-  const targetBranch = detectProtectedBranch(repo.path, options.protectedBranches);
+  const targetBranch = detectProtectedBranch(repo.path, options.protectedBranches, {
+    preferConfigured: options.protectedBranchesExplicit
+  });
   result.targetBranch = targetBranch;
 
   if (!targetBranch) {
     result.outcome = "skipped_no_protected_branch";
+    result.reason = "no_protected_branch_detected";
     return result;
   }
 
@@ -545,12 +557,26 @@ function parseBranchLine(branchLine) {
   return branchText.split("...")[0];
 }
 
-function detectProtectedBranch(repoPath, protectedBranches) {
+function detectProtectedBranch(repoPath, protectedBranches, options = {}) {
+  const configuredBranch = findConfiguredProtectedBranch(repoPath, protectedBranches);
   const originHead = resolveOriginHeadBranch(repoPath);
+
+  if (options.preferConfigured && configuredBranch) {
+    return configuredBranch;
+  }
+
   if (originHead) {
     return originHead;
   }
 
+  if (configuredBranch) {
+    return configuredBranch;
+  }
+
+  return null;
+}
+
+function findConfiguredProtectedBranch(repoPath, protectedBranches) {
   for (const branch of protectedBranches) {
     if (hasLocalBranch(repoPath, branch) || hasRemoteBranch(repoPath, branch)) {
       return branch;
@@ -761,8 +787,9 @@ function printResults(command, results, io) {
       continue;
     }
     const counts = normalizeCounts(entry.counts);
+    const reasonText = entry.reason ? ` reason=${entry.reason}` : "";
     io.out(
-      `${entry.repo}: outcome=${entry.outcome} current=${entry.currentBranch} target=${entry.targetBranch || "-"} clean=${entry.clean} staged=${counts.staged} unstaged=${counts.unstaged} untracked=${counts.untracked}`
+      `${entry.repo}: outcome=${entry.outcome} current=${entry.currentBranch} target=${entry.targetBranch || "-"} clean=${entry.clean} staged=${counts.staged} unstaged=${counts.unstaged} untracked=${counts.untracked}${reasonText}`
     );
     if (entry.actions && entry.actions.length > 0) {
       io.out(`  ${renderActions(entry.actions)}`);
