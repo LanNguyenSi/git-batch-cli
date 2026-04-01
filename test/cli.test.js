@@ -107,6 +107,20 @@ test("parseArgs collects repository filters", () => {
   assert.deepEqual(parsed.exclude, ["/legacy/", "sandbox"]);
 });
 
+test("parseArgs rejects invalid regex filters with a clear message", () => {
+  assert.throws(
+    () => parseArgs(["status", "/tmp/workspace", "--only", "/[invalid/"]),
+    /Invalid value for --only: \/\[invalid\//
+  );
+});
+
+test("parseArgs rejects unexpected extra positional arguments", () => {
+  assert.throws(
+    () => parseArgs(["status", "/tmp/workspace", "extra"]),
+    /Unexpected positional arguments: extra/
+  );
+});
+
 test("parseArgs marks explicitly configured protected branches", () => {
   const parsed = parseArgs(["sync", "/tmp/workspace", "--protected", "main,develop"]);
 
@@ -197,6 +211,30 @@ test("runSync skips dirty repos and pulls clean repos to the protected branch", 
   assert.match(fs.readFileSync(path.join(clean.repoPath, "README.md"), "utf8"), /updated/);
 });
 
+test("runSync skips repositories when explicit protected branches are local-only", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "git-batch-sync-local-only-"));
+  const repo = setupClonedRepo(root, "local-only-repo");
+
+  git(repo.repoPath, ["checkout", "-b", "develop"]);
+
+  const [result] = runSync(
+    discoverRepositories(root, {
+      includeCurrent: false,
+      includeHidden: false
+    }),
+    {
+      protectedBranches: ["develop"],
+      protectedBranchesExplicit: true,
+      includeDirty: false,
+      dryRun: false
+    }
+  );
+
+  assert.equal(result.outcome, "skipped_no_protected_branch");
+  assert.equal(result.reason, "no_remote_protected_branch_detected");
+  assert.equal(result.targetBranch, null);
+});
+
 test("detectProtectedBranch lets explicit protected branches override origin HEAD", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "git-batch-protected-"));
   const repo = setupClonedRepo(root, "priority-repo");
@@ -214,6 +252,16 @@ test("detectProtectedBranch lets explicit protected branches override origin HEA
   assert.equal(
     detectProtectedBranch(repo.repoPath, ["main"], { preferConfigured: false }),
     "develop"
+  );
+});
+
+test("detectProtectedBranch returns null when explicit protected branches are unavailable", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "git-batch-protected-missing-"));
+  const repo = setupClonedRepo(root, "missing-protected-repo");
+
+  assert.equal(
+    detectProtectedBranch(repo.repoPath, ["develop"], { preferConfigured: true }),
+    null
   );
 });
 
@@ -247,6 +295,7 @@ test("determineExitCode supports strict automation behavior", () => {
     determineExitCode("sync", [{ repo: "api", outcome: "ok", clean: true }], true),
     0
   );
+  assert.equal(determineExitCode("status", [], true), 0);
 });
 
 test("main emits structured JSON and strict exit codes for agents", async () => {
