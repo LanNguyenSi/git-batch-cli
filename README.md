@@ -22,6 +22,7 @@ Default `sync` flow:
 Dirty repositories are skipped by default.
 
 If you pass `--protected`, that explicit branch order takes precedence over `origin/HEAD`.
+For `sync`, explicitly configured protected branches must exist on `origin`. Local-only branches are not selected as pull targets.
 
 ## Local Installation
 
@@ -166,6 +167,8 @@ Recommended interpretation:
 - `status --json --strict`: fail if any repository is dirty
 - `dirty --json --strict`: fail if any repository has local changes
 - `sync --json --strict`: fail if any repository is skipped or errors
+
+With `--strict`, an empty result set stays exit code `0`. This keeps filtered runs such as `--only` stable for automation.
 
 ## Open Source Files
 

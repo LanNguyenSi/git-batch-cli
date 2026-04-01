@@ -205,12 +205,24 @@ function parseArgs(argv) {
       if (positionals.length > 1) {
         parsed.root = positionals[1];
       }
+      if (positionals.length > 2) {
+        throw new Error(
+          `Unexpected positional arguments: ${positionals.slice(2).join(" ")}`
+        );
+      }
     } else {
       parsed.root = positionals[0];
+      if (positionals.length > 1) {
+        throw new Error(
+          `Unexpected positional arguments: ${positionals.slice(1).join(" ")}`
+        );
+      }
     }
   }
 
   parsed.root = resolveCliPath(parsed.root);
+  validateFilterPatterns(parsed.only, "--only");
+  validateFilterPatterns(parsed.exclude, "--exclude");
   return parsed;
 }
 
@@ -286,6 +298,8 @@ function helpText() {
 function discoverRepositories(root, options) {
   const entries = fs.readdirSync(root, { withFileTypes: true });
   const repos = [];
+  const includePatterns = compilePatterns(options.only || [], "--only");
+  const excludePatterns = compilePatterns(options.exclude || [], "--exclude");
 
   if (options.includeCurrent && looksLikeGitRepo(root)) {
     repos.push(buildRepoDescriptor(root));
@@ -309,7 +323,12 @@ function discoverRepositories(root, options) {
   }
 
   return repos
-    .filter((repo) => matchesRepoFilters(repo.name, options))
+    .filter((repo) =>
+      matchesRepoFilters(repo.name, {
+        includePatterns,
+        excludePatterns
+      })
+    )
     .sort((left, right) => left.name.localeCompare(right.name));
 }
 
@@ -325,8 +344,8 @@ function buildRepoDescriptor(repoPath) {
 }
 
 function matchesRepoFilters(repoName, options) {
-  const includePatterns = compilePatterns(options.only || []);
-  const excludePatterns = compilePatterns(options.exclude || []);
+  const includePatterns = options.includePatterns || [];
+  const excludePatterns = options.excludePatterns || [];
 
   if (
     includePatterns.length > 0 &&
@@ -348,15 +367,29 @@ function compilePatterns(values) {
 
 function compilePattern(value) {
   const regexLiteral = value.match(/^\/(.+)\/([a-z]*)$/i);
-  if (regexLiteral) {
-    return new RegExp(regexLiteral[1], regexLiteral[2]);
-  }
+  try {
+    if (regexLiteral) {
+      return new RegExp(regexLiteral[1], regexLiteral[2]);
+    }
 
-  return new RegExp(escapeRegex(value), "i");
+    return new RegExp(escapeRegex(value), "i");
+  } catch (error) {
+    throw new Error(`Invalid repository filter pattern: ${value}`);
+  }
 }
 
 function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function validateFilterPatterns(values, optionName) {
+  for (const value of values) {
+    try {
+      compilePattern(value);
+    } catch (error) {
+      throw new Error(`Invalid value for ${optionName}: ${value}`);
+    }
+  }
 }
 
 function runStatus(repos, options) {
@@ -477,13 +510,14 @@ function syncRepository(repo, options) {
   executeGitCommand(repo.path, ["fetch", "--all", "--prune"], options, result);
 
   const targetBranch = detectProtectedBranch(repo.path, options.protectedBranches, {
-    preferConfigured: options.protectedBranchesExplicit
+    preferConfigured: options.protectedBranchesExplicit,
+    requireRemote: true
   });
   result.targetBranch = targetBranch;
 
   if (!targetBranch) {
     result.outcome = "skipped_no_protected_branch";
-    result.reason = "no_protected_branch_detected";
+    result.reason = "no_remote_protected_branch_detected";
     return result;
   }
 
@@ -558,11 +592,21 @@ function parseBranchLine(branchLine) {
 }
 
 function detectProtectedBranch(repoPath, protectedBranches, options = {}) {
-  const configuredBranch = findConfiguredProtectedBranch(repoPath, protectedBranches);
-  const originHead = resolveOriginHeadBranch(repoPath);
+  const configuredBranch = findConfiguredProtectedBranch(
+    repoPath,
+    protectedBranches,
+    options
+  );
+  const originHead = options.preferConfigured
+    ? null
+    : resolveOriginHeadBranch(repoPath, options);
 
   if (options.preferConfigured && configuredBranch) {
     return configuredBranch;
+  }
+
+  if (options.preferConfigured) {
+    return null;
   }
 
   if (originHead) {
@@ -576,9 +620,9 @@ function detectProtectedBranch(repoPath, protectedBranches, options = {}) {
   return null;
 }
 
-function findConfiguredProtectedBranch(repoPath, protectedBranches) {
+function findConfiguredProtectedBranch(repoPath, protectedBranches, options = {}) {
   for (const branch of protectedBranches) {
-    if (hasLocalBranch(repoPath, branch) || hasRemoteBranch(repoPath, branch)) {
+    if (hasProtectedBranch(repoPath, branch, options)) {
       return branch;
     }
   }
@@ -586,10 +630,22 @@ function findConfiguredProtectedBranch(repoPath, protectedBranches) {
   return null;
 }
 
-function resolveOriginHeadBranch(repoPath) {
-  const result = runGit(repoPath, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], {
-    allowFailure: true
-  });
+function hasProtectedBranch(repoPath, branch, options = {}) {
+  if (options.requireRemote) {
+    return hasRemoteBranch(repoPath, branch);
+  }
+
+  return hasLocalBranch(repoPath, branch) || hasRemoteBranch(repoPath, branch);
+}
+
+function resolveOriginHeadBranch(repoPath, options = {}) {
+  const result = runGit(
+    repoPath,
+    ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
+    {
+      allowFailure: true
+    }
+  );
 
   if (result.code !== 0) {
     return null;
@@ -600,7 +656,12 @@ function resolveOriginHeadBranch(repoPath) {
     return null;
   }
 
-  return ref.slice("origin/".length);
+  const branch = ref.slice("origin/".length);
+  if (options.requireRemote && !hasRemoteBranch(repoPath, branch)) {
+    return null;
+  }
+
+  return branch;
 }
 
 function hasLocalBranch(repoPath, branch) {
@@ -817,7 +878,7 @@ function determineExitCode(command, results, strict) {
   }
 
   if (results.length === 0) {
-    return 1;
+    return 0;
   }
 
   if (command === "sync") {
